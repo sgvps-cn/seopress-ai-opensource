@@ -1,0 +1,573 @@
+<?php
+/**
+ * 自动发布管理器
+ * 
+ * 使用 WordPress Cron 实现定时自动发布 AI 生成的文章
+ *
+ * @package SeoPress_AI
+ * @version 1.0.0
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+class SeoPress_Auto_Publish {
+
+    /**
+     * 单例实例
+     */
+    private static $instance = null;
+
+    /**
+     * Cron hook 名称
+     */
+    const CRON_HOOK = 'seopress_auto_publish';
+
+    /**
+     * 获取实例
+     */
+    public static function get_instance() {
+        if (null === self::$instance) {
+            self::$instance = new self();
+        }
+        return self::$instance;
+    }
+
+    /**
+     * 构造函数
+     */
+    private function __construct() {
+        // 注册 Cron 钩子
+        add_action(self::CRON_HOOK, array($this, 'execute_auto_publish'));
+        
+        // 激活/停用时的钩子
+        add_action('after_switch_theme', array($this, 'schedule_cron'));
+        add_action('switch_theme', array($this, 'unschedule_cron'));
+        
+        // 设置保存时更新 Cron
+        add_action('update_option_seopress_auto_publish_settings', array($this, 'reschedule_cron'));
+        
+        // AJAX 处理
+        add_action('wp_ajax_seopress_manual_publish', array($this, 'ajax_manual_publish'));
+        add_action('wp_ajax_seopress_get_publish_queue', array($this, 'ajax_get_queue'));
+        add_action('wp_ajax_seopress_add_to_queue', array($this, 'ajax_add_to_queue'));
+        add_action('wp_ajax_seopress_remove_from_queue', array($this, 'ajax_remove_from_queue'));
+    }
+
+    /**
+     * 注册 Cron 任务
+     */
+    public function schedule_cron() {
+        if (!wp_next_scheduled(self::CRON_HOOK)) {
+            $settings = get_option('seopress_auto_publish_settings', array());
+            $interval = isset($settings['interval']) ? $settings['interval'] : 'daily';
+            
+            // 注册自定义间隔
+            add_filter('cron_schedules', array($this, 'add_cron_intervals'));
+            
+            wp_schedule_event(time(), $interval, self::CRON_HOOK);
+        }
+    }
+
+    /**
+     * 取消 Cron 任务
+     */
+    public function unschedule_cron() {
+        $timestamp = wp_next_scheduled(self::CRON_HOOK);
+        if ($timestamp) {
+            wp_unschedule_event($timestamp, self::CRON_HOOK);
+        }
+    }
+
+    /**
+     * 重新调度 Cron
+     */
+    public function reschedule_cron() {
+        $this->unschedule_cron();
+        $this->schedule_cron();
+    }
+
+    /**
+     * 添加自定义 Cron 间隔
+     */
+    public function add_cron_intervals($schedules) {
+        $schedules['every_6_hours'] = array(
+            'interval' => 6 * HOUR_IN_SECONDS,
+            'display'  => __('每6小时', 'seopress-ai')
+        );
+        
+        $schedules['every_12_hours'] = array(
+            'interval' => 12 * HOUR_IN_SECONDS,
+            'display'  => __('每12小时', 'seopress-ai')
+        );
+        
+        $schedules['twice_daily'] = array(
+            'interval' => 12 * HOUR_IN_SECONDS,
+            'display'  => __('每天两次', 'seopress-ai')
+        );
+        
+        return $schedules;
+    }
+
+    /**
+     * 执行自动发布
+     */
+    public function execute_auto_publish() {
+        $settings = get_option('seopress_auto_publish_settings', array());
+        
+        // 检查是否启用
+        if (empty($settings['enabled'])) {
+            return;
+        }
+        
+        // 获取发布数量
+        $count = isset($settings['auto_count']) ? intval($settings['auto_count']) : 1;
+        $count = max(1, min(5, $count));
+        
+        // 获取发布队列
+        $queue = $this->get_queue();
+        if (empty($queue)) {
+            // 队列为空，从关键词列表自动生成
+            if (!empty($settings['keywords'])) {
+                $this->generate_and_publish_batch($settings, $count);
+            }
+            return;
+        }
+        
+        // 发布队列中的文章
+        $item = array_shift($queue);
+        $this->publish_article($item);
+        
+        // 更新队列
+        $this->update_queue($queue);
+        
+        // 记录日志
+        $this->log_publish($item);
+    }
+
+    /**
+     * 获取发布队列
+     */
+    public function get_queue() {
+        return get_option('seopress_publish_queue', array());
+    }
+
+    /**
+     * 更新发布队列
+     */
+    public function update_queue($queue) {
+        update_option('seopress_publish_queue', $queue);
+    }
+
+    /**
+     * 添加到队列
+     */
+    public function add_to_queue($item) {
+        $queue = $this->get_queue();
+        
+        $item['id'] = uniqid('seopress_');
+        $item['added_at'] = current_time('mysql');
+        
+        $queue[] = $item;
+        $this->update_queue($queue);
+        
+        return $item['id'];
+    }
+
+    /**
+     * 从队列移除
+     */
+    public function remove_from_queue($id) {
+        $queue = $this->get_queue();
+        
+        foreach ($queue as $key => $item) {
+            if ($item['id'] === $id) {
+                unset($queue[$key]);
+                break;
+            }
+        }
+        
+        $this->update_queue(array_values($queue));
+    }
+
+    /**
+     * 批量生成并发布文章
+     */
+    private function generate_and_publish_batch($settings, $count = 1) {
+        $keywords = explode("\n", $settings['keywords']);
+        $keywords = array_map('trim', $keywords);
+        $keywords = array_filter($keywords);
+        
+        if (empty($keywords)) {
+            return;
+        }
+        
+        // 获取未发布的关键词
+        $unpublished = array();
+        foreach ($keywords as $keyword) {
+            if (!$this->is_keyword_published($keyword)) {
+                $unpublished[] = $keyword;
+            }
+        }
+        
+        if (empty($unpublished)) {
+            $this->log_error('所有关键词都已发布');
+            return;
+        }
+        
+        // 随机选择关键词
+        shuffle($unpublished);
+        $selected = array_slice($unpublished, 0, $count);
+        
+        foreach ($selected as $keyword) {
+            $this->generate_and_publish_single($keyword, $settings);
+            sleep(2); // 避免API限流
+        }
+    }
+
+    /**
+     * 生成并发布单篇文章
+     */
+    private function generate_and_publish_single($keyword, $settings) {
+        // 获取 AI 管理器
+        $ai_manager = SeoPress_AI_Manager::get_instance();
+        
+        // 生成文章
+        $prompt = $this->build_prompt($keyword, $settings);
+        $result = $ai_manager->generate_content($prompt);
+        
+        if (!$result['success']) {
+            $this->log_error('生成失败: ' . ($result['error'] ?? '未知错误'));
+            return;
+        }
+        
+        $content = $result['content'];
+        
+        // 发布文章
+        $post_data = array(
+            'keyword' => $keyword,
+            'title'   => $this->extract_title($content, $keyword),
+            'content' => $content,
+            'category' => isset($settings['default_category']) ? $settings['default_category'] : 0,
+        );
+        
+        $post_id = $this->publish_article($post_data);
+        
+        if ($post_id) {
+            // 设置缩略图
+            if (class_exists('SeoPress_AI_Unsplash')) {
+                $unsplash = SeoPress_AI_Unsplash::get_instance();
+                $unsplash->set_featured_image($post_id, $keyword);
+            }
+            
+            // 记录日志
+            $this->log_publish($post_data);
+        }
+    }
+
+    /**
+     * 生成并发布文章（旧方法，保留兼容）
+     */
+    private function generate_and_publish($settings) {
+        $this->generate_and_publish_batch($settings, 1);
+    }
+
+    /**
+     * 构建 AI 提示词
+     */
+    private function build_prompt($keyword, $settings) {
+        $template = isset($settings['prompt_template']) ? $settings['prompt_template'] : '';
+        
+        if (empty($template)) {
+            $template = '请围绕关键词"{keyword}"撰写一篇原创的SEO优化文章。
+
+要求：
+1. 文章字数不少于1500字
+2. 包含合理的H2、H3标题结构
+3. 自然融入关键词，密度控制在2%-3%
+4. 内容具有实用价值，语言流畅自然
+5. 结尾包含总结和行动建议
+
+请直接输出文章内容，第一行为标题。';
+        }
+        
+        return str_replace('{keyword}', $keyword, $template);
+    }
+
+    /**
+     * 从内容提取标题
+     */
+    private function extract_title($content, $keyword) {
+        // 尝试从第一行提取标题
+        $lines = explode("\n", trim($content));
+        $first_line = trim($lines[0]);
+        
+        // 移除 Markdown 标题标记
+        $first_line = preg_replace('/^#+\s*/', '', $first_line);
+        
+        if (mb_strlen($first_line) > 10 && mb_strlen($first_line) < 100) {
+            return $first_line;
+        }
+        
+        // 回退到关键词作为标题
+        return $keyword;
+    }
+
+    /**
+     * 发布文章
+     */
+    public function publish_article($data) {
+        $post_data = array(
+            'post_title'   => sanitize_text_field($data['title']),
+            'post_content' => wp_kses_post($data['content']),
+            'post_status'  => 'publish',
+            'post_author'  => get_current_user_id() ?: 1,
+            'post_type'    => 'post',
+        );
+        
+        // 设置分类
+        if (!empty($data['category'])) {
+            $post_data['post_category'] = array(intval($data['category']));
+        }
+        
+        // 创建文章
+        $post_id = wp_insert_post($post_data);
+        
+        if (is_wp_error($post_id)) {
+            $this->log_error('发布失败: ' . $post_id->get_error_message());
+            return false;
+        }
+        
+        // 添加 Meta
+        if (!empty($data['keyword'])) {
+            update_post_meta($post_id, '_seopress_keyword', $data['keyword']);
+            update_post_meta($post_id, '_seopress_ai_generated', 1);
+            update_post_meta($post_id, '_seopress_generated_at', current_time('mysql'));
+        }
+        
+        // 生成 SEO Meta
+        $this->generate_seo_meta($post_id, $data);
+        
+        // 推送到百度
+        $settings = get_option('seopress_auto_publish_settings', array());
+        if (!empty($settings['auto_push_baidu'])) {
+            $baidu_push = SeoPress_AI_Baidu_Push::get_instance();
+            $baidu_push->push_url(get_permalink($post_id));
+        }
+        
+        return $post_id;
+    }
+
+    /**
+     * 生成 SEO Meta
+     */
+    private function generate_seo_meta($post_id, $data) {
+        $post = get_post($post_id);
+        $keyword = isset($data['keyword']) ? $data['keyword'] : '';
+        
+        // 生成 Meta Description
+        $description = wp_trim_words(strip_tags($post->post_content), 30, '...');
+        update_post_meta($post_id, '_seopress_meta_description', $description);
+        
+        // 生成关键词
+        if ($keyword) {
+            update_post_meta($post_id, '_seopress_meta_keywords', $keyword);
+        }
+        
+        // 生成 Focus Keyword
+        update_post_meta($post_id, '_seopress_focus_keyword', $keyword);
+    }
+
+    /**
+     * 检查关键词是否已发布
+     */
+    private function is_keyword_published($keyword) {
+        $args = array(
+            'post_type'   => 'post',
+            'post_status' => 'publish',
+            'meta_query'  => array(
+                array(
+                    'key'   => '_seopress_keyword',
+                    'value' => $keyword,
+                ),
+            ),
+            'posts_per_page' => 1,
+        );
+        
+        $query = new WP_Query($args);
+        return $query->have_posts();
+    }
+
+    /**
+     * 记录发布日志
+     */
+    private function log_publish($item) {
+        $log = get_option('seopress_publish_log', array());
+        
+        $log[] = array(
+            'time'    => current_time('mysql'),
+            'keyword' => isset($item['keyword']) ? $item['keyword'] : '',
+            'title'   => isset($item['title']) ? $item['title'] : '',
+            'status'  => 'success',
+        );
+        
+        // 只保留最近100条
+        if (count($log) > 100) {
+            $log = array_slice($log, -100);
+        }
+        
+        update_option('seopress_publish_log', $log);
+    }
+
+    /**
+     * 记录错误日志
+     */
+    private function log_error($message) {
+        $log = get_option('seopress_error_log', array());
+        
+        $log[] = array(
+            'time'    => current_time('mysql'),
+            'message' => $message,
+        );
+        
+        // 只保留最近50条
+        if (count($log) > 50) {
+            $log = array_slice($log, -50);
+        }
+        
+        update_option('seopress_error_log', $log);
+    }
+
+    /**
+     * 获取发布日志
+     */
+    public function get_publish_log($limit = 20) {
+        $log = get_option('seopress_publish_log', array());
+        return array_slice(array_reverse($log), 0, $limit);
+    }
+
+    /**
+     * 获取下次执行时间
+     */
+    public function get_next_run() {
+        $timestamp = wp_next_scheduled(self::CRON_HOOK);
+        if ($timestamp) {
+            return date_i18n('Y-m-d H:i:s', $timestamp);
+        }
+        return null;
+    }
+
+    /**
+     * AJAX: 手动发布
+     */
+    public function ajax_manual_publish() {
+        check_ajax_referer('seopress_admin', 'nonce');
+        
+        if (!current_user_can('publish_posts')) {
+            wp_send_json_error('权限不足');
+        }
+        
+        $keyword = isset($_POST['keyword']) ? sanitize_text_field($_POST['keyword']) : '';
+        
+        if (empty($keyword)) {
+            wp_send_json_error('请输入关键词');
+        }
+        
+        $settings = get_option('seopress_auto_publish_settings', array());
+        
+        // 获取 AI 管理器
+        $ai_manager = SeoPress_AI_Manager::get_instance();
+        
+        // 生成文章
+        $prompt = $this->build_prompt($keyword, $settings);
+        $content = $ai_manager->generate_content($prompt);
+        
+        if (is_wp_error($content)) {
+            wp_send_json_error($content->get_error_message());
+        }
+        
+        // 发布文章
+        $post_data = array(
+            'keyword' => $keyword,
+            'title'   => $this->extract_title($content, $keyword),
+            'content' => $content,
+            'category' => isset($_POST['category']) ? intval($_POST['category']) : 0,
+        );
+        
+        $post_id = $this->publish_article($post_data);
+        
+        if ($post_id) {
+            wp_send_json_success(array(
+                'post_id'  => $post_id,
+                'edit_url' => get_edit_post_link($post_id, ''),
+                'view_url' => get_permalink($post_id),
+            ));
+        } else {
+            wp_send_json_error('发布失败');
+        }
+    }
+
+    /**
+     * AJAX: 获取队列
+     */
+    public function ajax_get_queue() {
+        check_ajax_referer('seopress_admin', 'nonce');
+        
+        if (!current_user_can('edit_posts')) {
+            wp_send_json_error('权限不足');
+        }
+        
+        $queue = $this->get_queue();
+        wp_send_json_success($queue);
+    }
+
+    /**
+     * AJAX: 添加到队列
+     */
+    public function ajax_add_to_queue() {
+        check_ajax_referer('seopress_admin', 'nonce');
+        
+        if (!current_user_can('edit_posts')) {
+            wp_send_json_error('权限不足');
+        }
+        
+        $keyword = isset($_POST['keyword']) ? sanitize_text_field($_POST['keyword']) : '';
+        
+        if (empty($keyword)) {
+            wp_send_json_error('请输入关键词');
+        }
+        
+        $id = $this->add_to_queue(array(
+            'keyword'  => $keyword,
+            'category' => isset($_POST['category']) ? intval($_POST['category']) : 0,
+        ));
+        
+        wp_send_json_success(array('id' => $id));
+    }
+
+    /**
+     * AJAX: 从队列移除
+     */
+    public function ajax_remove_from_queue() {
+        check_ajax_referer('seopress_admin', 'nonce');
+        
+        if (!current_user_can('edit_posts')) {
+            wp_send_json_error('权限不足');
+        }
+        
+        $id = isset($_POST['id']) ? sanitize_text_field($_POST['id']) : '';
+        
+        if (empty($id)) {
+            wp_send_json_error('ID不能为空');
+        }
+        
+        $this->remove_from_queue($id);
+        wp_send_json_success();
+    }
+}
+
+// 初始化
+add_action('init', function() {
+    SeoPress_Auto_Publish::get_instance();
+});

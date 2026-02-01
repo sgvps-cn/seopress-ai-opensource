@@ -1,0 +1,198 @@
+{
+    "$schema": "https://schemas.wp.org/trunk/theme.json",
+    "version": 2,
+    "settings": {
+        "appearanceTools": true,
+        "color": {
+            "custom": true,
+            "customDuotone": false,
+            "customGradient": true,
+            "defaultDuotone": false,
+            "defaultGradients": false,
+            "defaultPalette": false,
+            "palette": [
+                {
+                    "color": "#1890ff",
+                    "name": "Primary",
+                    "slug": "primary"
+                },
+                {
+                    "color": "#40a9ff",
+                    "name": "Primary Light",
+                    "slug": "primary-light"
+                },
+                {
+                    "color": "#096dd9",
+                    "name": "Primary Dark",
+                    "slug": "primary-dark"
+                },
+                {
+                    "color": "#52c41a",
+                    "name": "Success",
+                    "slug": "success"
+                },
+                {
+                    "color": "#faad14",
+                    "name": "Warning",
+                    "slug": "warning"
+                },
+                {
+                    "color": "#f5222d",
+                    "name": "Error",
+                    "slug": "error"
+                },
+                {
+                    "color": "#262626",
+                    "name": "Text Primary",
+                    "slug": "text-primary"
+                },
+                {
+                    "color": "#595959",
+                    "name": "Text Secondary",
+                    "slug": "text-secondary"
+                },
+                {
+                    "color": "#8c8c8c",
+                    "name": "Text Tertiary",
+                    "slug": "text-tertiary"
+                },
+                {
+                    "color": "#f5f5f5",
+                    "name": "Background",
+                    "slug": "background"
+                },
+                {
+                    "color": "#ffffff",
+                    "name": "White",
+                    "slug": "white"
+                }
+            ]
+        },
+        "layout": {
+            "contentSize": "720px",
+            "wideSize": "1200px"
+        },
+        "spacing": {
+            "units": ["px", "em", "rem", "%", "vw", "vh"]
+        },
+        "typography": {
+            "customFontSize": true,
+            "dropCap": false,
+            "fluid": true,
+            "fontFamilies": [
+                {
+                    "fontFamily": "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif",
+                    "name": "System Font",
+                    "slug": "system"
+                },
+                {
+                    "fontFamily": "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
+                    "name": "Monospace",
+                    "slug": "monospace"
+                }
+            ],
+            "fontSizes": [
+                {
+                    "size": "12px",
+                    "slug": "xs",
+                    "name": "Extra Small"
+                },
+                {
+                    "size": "14px",
+                    "slug": "sm",
+                    "name": "Small"
+                },
+                {
+                    "size": "16px",
+                    "slug": "base",
+                    "name": "Base"
+                },
+                {
+                    "size": "18px",
+                    "slug": "lg",
+                    "name": "Large"
+                },
+                {
+                    "size": "20px",
+                    "slug": "xl",
+                    "name": "Extra Large"
+                },
+                {
+                    "size": "24px",
+                    "slug": "2xl",
+                    "name": "2X Large"
+                },
+                {
+                    "size": "30px",
+                    "slug": "3xl",
+                    "name": "3X Large"
+                },
+                {
+                    "size": "36px",
+                    "slug": "4xl",
+                    "name": "4X Large"
+                }
+            ],
+            "lineHeight": true
+        },
+        "useRootPaddingAwareAlignments": true,
+        "blocks": {
+            "core/button": {
+                "border": {
+                    "radius": true
+                }
+            }
+        }
+    },
+    "styles": {
+        "color": {
+            "background": "var(--wp--preset--color--background)",
+            "text": "var(--wp--preset--color--text-primary)"
+        },
+        "elements": {
+            "button": {
+                "color": {
+                    "background": "var(--wp--preset--color--primary)",
+                    "text": "var(--wp--preset--color--white)"
+                },
+                "border": {
+                    "radius": "8px"
+                },
+                ":hover": {
+                    "color": {
+                        "background": "var(--wp--preset--color--primary-light)"
+                    }
+                }
+            },
+            "link": {
+                "color": {
+                    "text": "var(--wp--preset--color--primary)"
+                },
+                ":hover": {
+                    "color": {
+                        "text": "var(--wp--preset--color--primary-light)"
+                    }
+                }
+            },
+            "heading": {
+                "color": {
+                    "text": "var(--wp--preset--color--text-primary)"
+                }
+            }
+        },
+        "spacing": {
+            "blockGap": "24px",
+            "padding": {
+                "top": "0",
+                "right": "16px",
+                "bottom": "0",
+                "left": "16px"
+            }
+        },
+        "typography": {
+            "fontFamily": "var(--wp--preset--font-family--system)",
+            "fontSize": "var(--wp--preset--font-size--base)",
+            "lineHeight": "1.75"
+        }
+    }
+}
